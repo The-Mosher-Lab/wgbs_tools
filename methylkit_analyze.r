@@ -6,20 +6,14 @@
 # Usage: Load a .methylKit file from MethylDackel and execute methylKit's DMR
 # calling on it to output windows of differential methylation
 
-library('argparser', quietly = TRUE)
+library(argparser, quietly = TRUE)
 
 
 # This function will analyze methylkit files with the desired parameters
 methylkit_analyze <- function(control_files, experimental_files, sample_id_control,
                               sample_id_experimental, c_context, min_coverage,
-                              window_size, step_size, cores, q_val, diff,
-                              output_dir, pool) {
+                              window_size, step_size, cores, pool) {
 
-  # Load the methylkit library here
-  # It's bad generally to do this but it takes a while to load.
-  suppressMessages(library('methylKit', quietly = TRUE))
-
-  # Read the files
   meth_obj <- methRead(
     location = as.list(c(control_files, experimental_files)),
     sample.id = as.list(c(
@@ -35,73 +29,76 @@ methylkit_analyze <- function(control_files, experimental_files, sample_id_contr
     context = c_context
   )
 
-  # Pool samples if desired
   if (pool == TRUE) {
     meth_obj <- pool(meth_obj)
   }
 
-  # Use a read coverage filter if desired
   if (min_coverage > 0) {
     meth_obj <- filterByCoverage(meth_obj, lo.count = min_coverage)
   }
 
-  # normalizeCoverage for the filtered object
   meth_obj <- normalizeCoverage(meth_obj)
 
-  # Create windows
   meth_obj <- tileMethylCounts(meth_obj,
                                win.size = window_size,
                                step.size = step_size,
                                mc.cores = cores)
 
-  # Unite the tiles
   meth_obj <- unite(meth_obj, mc.cores = cores)
 
-  # Get differentially methylated windows, using multicore support
   meth_diff <- calculateDiffMeth(meth_obj, mc.cores = cores)
 
+  return(meth_diff)
+}
+
+
+get_diff_windows <- function(meth_diff_obj, min_diff, q_val) {
+
   meth_diff_windows <- getMethylDiff(
-    meth_diff,
-    difference = diff,
+    meth_diff_obj,
+    difference = min_diff,
     qvalue = q_val
   )
 
   meth_diff_hyper <- getMethylDiff(
     meth_diff,
-    difference = diff,
+    difference = min_diff,
     qvalue = q_val,
     type = "hyper"
   )
 
   meth_diff_hypo <- getMethylDiff(
     meth_diff,
-    difference = diff,
+    difference = min_diff,
     qvalue = q_val,
     type = "hypo"
   )
+  return(list(windows = meth_diff_windows,
+              hyper = meth_diff_hyper,
+              hypo = meth_diff_hypo))
+}
 
-  # Print out the results
-  print(paste0(c_context, ' DMWs:', nrow(meth_diff_windows)))
-  print(paste0(c_context, ' Hyper-DMWs:', nrow(meth_diff_hyper)))
-  print(paste0(c_context, ' Hypo-DMWs:', nrow(meth_diff_hypo)))
 
-  # Export results
-  write.csv(meth_diff_windows,
+write_results <- function(meth_diff_list, output_dir, sample_id_control,
+                          sample_id_experimental, c_context, window_size,
+                          step_size, min_diff, q_val) {
+
+  write.csv(meth_diff_list$windows,
             paste0(output_dir, '/', sample_id_experimental, '_', sample_id_control,
-                  '_',c_context, '_norm_window_', window_size, '_', step_size,
-                  '_d', diff, '_q', q_val, '.csv'
+                  '_', c_context, '_norm_window_', window_size, '_', step_size,
+                  '_d', min_diff, '_q', q_val, '.csv'
                   )
             )
-  write.csv(meth_diff_hyper,
+  write.csv(meth_diff_list$hyper,
             paste0(output_dir, '/', sample_id_experimental, '_', sample_id_control,
-                  '_',c_context, '_norm_window_', window_size, '_', step_size,
-                  '_d', diff, '_q', q_val, '_hyper.csv'
+                  '_', c_context, '_norm_window_', window_size, '_', step_size,
+                  '_d', min_diff, '_q', q_val, '_hyper.csv'
                   )
             )
-  write.csv(meth_diff_hypo,
+  write.csv(meth_diff_list$hypo,
             paste0(output_dir, '/', sample_id_experimental, '_', sample_id_control,
-                  '_',c_context, '_norm_window_', window_size, '_', step_size,
-                  '_d', diff, '_q', q_val, '_hypo.csv'
+                  '_', c_context, '_norm_window_', window_size, '_', step_size,
+                  '_d', min_diff, '_q', q_val, '_hypo.csv'
                   )
             )
 }
@@ -109,7 +106,7 @@ methylkit_analyze <- function(control_files, experimental_files, sample_id_contr
 
 # Parse command-line arguments
 
-get_args <- function () {
+get_args <- function() {
   parser <- arg_parser('Analyze input files with methylKit and determine differentially methylated windows.')
   parser <- add_argument(parser, '--control',
                         help='Control sample files, comma separated')
@@ -152,21 +149,36 @@ get_args <- function () {
 }
 
 
-# Main definition
+# Entry point
 
-main <- function (args) {
+main <- function(args) {
+  # It's bad generally to do this but it takes a while to load and loading at the
+  # top level causes the --help message to take forever to display
+  suppressMessages(library(methylKit))
+
   control_files <- unlist(strsplit(args$control, ','))
   experimental_files <- unlist(strsplit(args$experimental, ','))
 
   output_dir <- 'methylkit_analyze'
   dir.create(output_dir)
 
-  # Run the analysis and output results
+  # Run the analysis 
+  methyldiff_obj <- methylkit_analyze(control_files, experimental_files, args$control_id,
+                                      args$experimental_id, args$context, args$min_cov,
+                                      args$window_size, args$step_size, args$threads,
+                                      args$pool)
 
-  methylkit_analyze(control_files, experimental_files, args$control_id,
-                    args$experimental_id, args$context, args$min_cov,
-                    args$window_size, args$step_size, args$threads, args$q_val,
-                    args$diff_meth, output_dir, args$pool)
+  methyldiff_windows <- get_diff_windows(methyldiff_obj, args$diff_meth, args$q_val)
+
+  # Print out the results
+  print(paste0(args$context, ' DMWs:', nrow(methyldiff_windows$windows)))
+  print(paste0(args$context, ' Hyper-DMWs:', nrow(methyldiff_windows$hyper)))
+  print(paste0(args$context, ' Hypo-DMWs:', nrow(methyldiff_windows$hypo)))
+
+  # Output the windows to the output_dir
+  write_results(methyldiff_windows, output_dir, args$control_id,
+                args$experimental_id, args$context, args$window_size,
+                args$step_size, args$diff_meth, args$q_val)
 }
 
 

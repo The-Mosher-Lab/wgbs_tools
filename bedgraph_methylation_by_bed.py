@@ -45,8 +45,8 @@ def calc_methylation(input_file, mincov):
                 try:
                     perc_met = nC / (nC + nT) * 100
                 except ZeroDivisionError:
-                    perc_met = 0
-                print('\t'.join(entry[0:4]), perc_met, sep='\t')
+                    perc_met = 'NA'  # Indicate missing data for zero depth
+                print(*entry[0:4], perc_met, sep='\t')
 
 
 # Get command line options
