@@ -15,9 +15,9 @@ from os import getpid, remove
 
 def sort_bedgraph(input_file, output_file):
     subprocess.run(
-        "sed '1d' {} | sort -k1,1 -k2,2n > {}".format(input_file, output_file),
+        "grep -v 'track' {} | sort -k1,1 -k2,2n > {}".format(input_file, output_file),
         shell=True
-    )
+    )  # Removing "track" lines from the bedGraph is necessary for proper sorting
 
 
 def sort_features_bed(input_file, output_file):
